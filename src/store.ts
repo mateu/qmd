@@ -38,6 +38,14 @@ import {
   loadConfig as collectionsLoadConfig,
   type NamedCollection,
 } from "./collections.js";
+import {
+  initializeGraphSchema,
+  upsertGraphNode,
+  deleteGraphEdgesForSource,
+  indexDocumentLinks,
+  applyGraphBoost,
+  type GraphBoostConfig,
+} from "./graph.js";
 
 // =============================================================================
 // Configuration
@@ -635,6 +643,9 @@ function initializeDatabase(db: Database): void {
   // Drop legacy tables that are now managed in YAML
   db.exec(`DROP TABLE IF EXISTS path_contexts`);
   db.exec(`DROP TABLE IF EXISTS collections`);
+
+  // Initialize graph schema
+  initializeGraphSchema(db);
 
   // Content-addressable storage - the source of truth for document content
   db.exec(`

@@ -22,6 +22,12 @@ import {
   structuredSearch,
   DEFAULT_MULTI_GET_MAX_BYTES,
 } from "./store.js";
+import {
+  traverseGraph,
+  getGraphNeighbors,
+  getGraphStats,
+  rebuildGraphFromDocuments,
+} from "./graph.js";
 import type { Store, StructuredSubSearch } from "./store.js";
 import { getCollection, getGlobalContext, getDefaultCollectionNames } from "./collections.js";
 import { disposeDefaultLlamaCpp } from "./llm.js";
@@ -521,6 +527,130 @@ Intent-aware lex (C++ performance, not sports):
       };
     }
   );
+
+  // ---------------------------------------------------------------------------
+  // Tool: graph_neighbors - Get document neighbors
+  // ---------------------------------------------------------------------------
+
+  server.registerTool(
+    "graph_neighbors",
+    {
+      title: "Get Graph Neighbors",
+      description: "Get the neighbors (linked documents) of a document from the knowledge graph.",
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      inputSchema: {
+        file: z.string().describe("File path or docid to get neighbors for"),
+      },
+    },
+    async ({ file }) => {
+      // Find document by hash or path
+      const doc = store.findDocument(file, { includeBody: false });
+      if ("error" in doc) {
+        return { content: [{ type: "text", text: `Document not found: ${file}` }], isError: true };
+      }
+
+      const neighbors = getGraphNeighbors(store.db, doc.hash);
+      if (neighbors.length === 0) {
+        return { content: [{ type: "text", text: `No neighbors found for ${file}` }] };
+      }
+
+      const lines = [`Neighbors of ${file}:`];
+      for (const n of neighbors) {
+        const dir = n.direction === "outgoing" ? "→" : "←";
+        lines.push(`  ${dir} ${n.collection}/${n.path} (${n.edgeType})`);
+      }
+
+      return {
+        content: [{ type: "text", text: lines.join("\n") }],
+        structuredContent: { neighbors },
+      };
+    }
+  );
+
+  // ---------------------------------------------------------------------------
+  // Tool: graph_traversal - Traverse the graph
+  // ---------------------------------------------------------------------------
+
+  server.registerTool(
+    "graph_traverse",
+    {
+      title: "Traverse Graph",
+      description: "Traverse the knowledge graph starting from a document.",
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      inputSchema: {
+        file: z.string().describe("Starting document path or docid"),
+        depth: z.number().optional().default(2).describe("Max traversal depth (1-3)"),
+      },
+    },
+    async ({ file, depth }) => {
+      const doc = store.findDocument(file, { includeBody: false });
+      if ("error" in doc) {
+        return { content: [{ type: "text", text: `Document not found: ${file}` }], isError: true };
+      }
+
+      const results = traverseGraph(store.db, doc.hash, Math.min(depth, 3));
+
+      const lines = [`Graph traversal from ${file} (depth: ${depth}):`];
+      for (const r of results) {
+        lines.push(`  [${r.distance}] ${r.node.collection}/${r.node.path} - ${r.node.title}`);
+      }
+
+      return {
+        content: [{ type: "text", text: lines.join("\n") }],
+        structuredContent: { results },
+      };
+    }
+  );
+
+  // ---------------------------------------------------------------------------
+  // Tool: graph_stats - Get graph statistics
+  // ---------------------------------------------------------------------------
+
+  server.registerTool(
+    "graph_stats",
+    {
+      title: "Graph Statistics",
+      description: "Get statistics about the knowledge graph: node count, edge count, etc.",
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      inputSchema: {},
+    },
+    async () => {
+      const stats = getGraphStats(store.db);
+      const summary = [
+        "Graph Statistics:",
+        `  Nodes: ${stats.nodeCount}`,
+        `  Edges: ${stats.edgeCount}`,
+        `  Avg Degree: ${stats.avgDegree.toFixed(2)}`,
+        `  Orphan Nodes: ${stats.orphanNodes}`,
+      ];
+      return {
+        content: [{ type: "text", text: summary.join("\n") }],
+        structuredContent: stats,
+      };
+    }
+  );
+
+  // ---------------------------------------------------------------------------
+  // Tool: graph_rebuild - Rebuild graph from documents
+  // ---------------------------------------------------------------------------
+
+  server.registerTool(
+    "graph_rebuild",
+    {
+      title: "Rebuild Graph",
+      description: "Rebuild the knowledge graph by re-indexing all document links. Useful after bulk updates.",
+      annotations: { readOnlyHint: false, openWorldHint: false },
+      inputSchema: {},
+    },
+    async () => {
+      const result = rebuildGraphFromDocuments(store.db);
+      return {
+        content: [{ type: "text", text: `Graph rebuilt: ${result.nodes} nodes, ${result.edges} edges` }],
+        structuredContent: result,
+      };
+    }
+  );
+
 
   return server;
 }
